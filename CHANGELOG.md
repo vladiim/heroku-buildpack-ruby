@@ -1,3 +1,59 @@
+## v72 (7/23/2013)
+
+Bugfixes:
+
+* Fix rake task detection for Rails 3 (@hynkle, #118)
+
+## v71 (7/18/2013)
+
+* Revert to v69 due to asset:precompile bugs
+
+## v70 (7/18/2013)
+
+Bugfixes:
+
+* Don't silently fail rake task checks (@gabrielg, #34)
+
+## v69 (7/16/2013)
+
+Bugfixes:
+
+* Add spacing to end of instrumentation
+
+## v68 (7/16/2013)
+
+Features:
+
+* Log buildpack name and entering rails3/4 compile
+
+## v67 (7/10/2013)
+
+Features:
+
+* Fetcher uses CDN if available
+* Add buildpack_version to the instrumentation output
+
+Bugfixes:
+
+* Don't print DEBUG messages for lxpc when env var is present
+* Fix ruby gemfile warning line for JRuby
+
+## v66 (7/9/2013)
+
+Bugfixes:
+
+* Include logtoken properly
+
+## v65 (7/9/2013)
+
+Features:
+
+* Instrument timing infrastructure for the buildpack
+
+Bugfixes:
+
+* Fix DATABASE_URL to use jdbc-postgres for JRuby (@jkrall, #116)
+
 ## v64 (6/19/2013)
 
 Features:
