@@ -533,6 +533,7 @@ WARNING
               bundler_output << pipe("#{env_vars} #{bundle_command} --no-clean 2>&1")
             end
           end
+          topic "Bundle Time: #{time}"
         end
 
         if $?.success?
