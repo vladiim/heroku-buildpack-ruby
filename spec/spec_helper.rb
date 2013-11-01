@@ -45,3 +45,13 @@ def create_file_with_size_in(size, dir)
   File.open(name, 'w') {|f| f.print([ 1 ].pack("C") * size) }
   Pathname.new name
 end
+
+def capture_stdout_stderr(orig_stdout = STDOUT, orig_stderr = STDERR)
+  out = Object.const_set("STDOUT", StringIO.new)
+  err = Object.const_set("STDERR", StringIO.new)
+  yield
+  return out, err
+ensure
+  Object.const_set("STDOUT", orig_stdout)
+  Object.const_set("STDERR", orig_stderr)
+end
