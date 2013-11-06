@@ -8,12 +8,16 @@ class LanguagePack::Helpers::BundlerWrapper
     end
   end
 
+  NoLockfileErrorMsg = "Gemfile.lock is required. Please run \"bundle install\" locally\nand commit your Gemfile.lock."
+
+
   VENDOR_URL         = LanguagePack::Base::VENDOR_URL                # coupling
   DEFAULT_FETCHER    = LanguagePack::Fetcher.new(VENDOR_URL)         # coupling
   BUNDLER_DIR_NAME   = LanguagePack::Ruby::BUNDLER_GEM_PATH          # coupling
   BUNDLER_TAR        = "#{LanguagePack::Ruby::BUNDLER_GEM_PATH}.tgz" # coupling
   BUNDLER_PATH       = File.expand_path("../../../../tmp/#{BUNDLER_DIR_NAME}", __FILE__)
   GEMFILE_PATH       = Pathname.new "./Gemfile"
+
 
   attr_reader   :bundler_path
 
@@ -32,13 +36,45 @@ class LanguagePack::Helpers::BundlerWrapper
     end
   end
 
-    def without_warnings(&block)
-      orig_verb  = $VERBOSE
-      $VERBOSE   = nil
-      yield
-    ensure
-      $VERBOSE = orig_verb
+  def without_warnings(&block)
+    orig_verb = $VERBOSE
+    $VERBOSE  = NoLockfileErrorMsg
+    yield
+  ensure
+    $VERBOSE = orig_verb
+  end
+
+  def has_gem?(name)
+    specs.key?(name)
+  end
+
+  def gem_version(name)
+    instrument "ruby.gem_version" do
+      if spec = specs[name]
+        spec.version
+      end
     end
+  end
+
+  # detects whether the Gemfile.lock contains the Windows platform
+  # @return [Boolean] true if the Gemfile.lock was created on Windows
+  def has_windows_gemfile_lock?
+    platforms.detect do |platform|
+      /mingw|mswin/.match(platform.os) if platform.is_a?(Gem::Platform)
+    end
+  end
+
+  def specs
+    @specs     ||= lockfile_parser.specs.each_with_object({}) {|spec, hash| hash[spec.name] = spec }
+  end
+
+  def platforms
+    @platforms ||= lockfile_parser.platforms
+  end
+
+  def version
+    Bundler::VERSION
+  end
 
   def instrument(*args, &block)
     LanguagePack::Instrument.instrument(*args, &block)
@@ -72,10 +108,11 @@ class LanguagePack::Helpers::BundlerWrapper
   end
 
   def gemfile_lock?
-    File.exist?('Gemfile') && File.exist?('Gemfile.lock')
+    @gemfile_lock_exist ||= File.exist?('Gemfile') && File.exist?('Gemfile.lock')
   end
 
   def lockfile_parser
+    raise NoLockfileErrorMsg unless gemfile_lock?
     @lockfile_parser ||= parse_gemfile_lock
   end
 

@@ -37,6 +37,10 @@ module LanguagePack
       @version_without_patchlevel = @version.sub(/-p[\d]+/, '')
     end
 
+    def missing?
+      !set
+    end
+
     def default?
       @version == none
     end

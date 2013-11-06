@@ -22,6 +22,73 @@ class LanguagePack::Ruby < LanguagePack::Base
   DEFAULT_RUBY_VERSION = "ruby-2.0.0"
   RBX_BASE_URL         = "http://binaries.rubini.us/heroku"
 
+  WINDOWS_WARNING      = <<WARNING
+Removing `Gemfile.lock` because it was generated on Windows.
+Bundler will do a full resolve so native gems are handled properly.
+This may result in unexpected gem versions being used in your app.
+WARNING
+
+  SQLITE_ERROR         = <<ERROR
+Detected sqlite3 gem which is not supported on Heroku.
+https://devcenter.heroku.com/articles/sqlite3
+ERROR
+
+  DATABASE_YML         = <<DATABASE_YML
+<%
+
+require 'cgi'
+require 'uri'
+
+begin
+  uri = URI.parse(ENV["DATABASE_URL"])
+rescue URI::InvalidURIError
+  raise "Invalid DATABASE_URL"
+end
+
+raise "No RACK_ENV or RAILS_ENV found" unless ENV["RAILS_ENV"] || ENV["RACK_ENV"]
+
+def attribute(name, value, force_string = false)
+  if value
+    value_string =
+      if force_string
+        '"' + value + '"'
+      else
+        value
+      end
+    "\#{name}: \#{value_string}"
+  else
+    ""
+  end
+end
+
+adapter = uri.scheme
+adapter = "postgresql" if adapter == "postgres"
+
+database = (uri.path || "").split("/")[1]
+
+username = uri.user
+password = uri.password
+
+host = uri.host
+port = uri.port
+
+params = CGI.parse(uri.query || "")
+
+%>
+
+<%= ENV["RAILS_ENV"] || ENV["RACK_ENV"] %>:
+  <%= attribute "adapter",  adapter %>
+  <%= attribute "database", database %>
+  <%= attribute "username", username %>
+  <%= attribute "password", password, true %>
+  <%= attribute "host",     host %>
+  <%= attribute "port",     port %>
+
+<% params.each do |key, value| %>
+  <%= key %>: <%= value.first %>
+<% end %>
+DATABASE_YML
+
   # detects if this is a valid Ruby app
   # @return [Boolean] true if it's a Ruby app
   def self.use?
@@ -30,36 +97,12 @@ class LanguagePack::Ruby < LanguagePack::Base
     end
   end
 
-  def self.gemfile_lock?
-    File.exist?('Gemfile') && File.exist?('Gemfile.lock')
-  end
-
   def self.bundler
     @bundler ||= LanguagePack::Helpers::BundlerWrapper.new
   end
 
   def bundler
     self.class.bundler
-  end
-
-  def self.bundle
-    bundler.lockfile_parser
-  end
-
-  def bundle
-    self.class.bundle
-  end
-
-  def bundler_path
-    bundler.bundler_path
-  end
-
-  def self.gem_version(name)
-    instrument "ruby.gem_version" do
-      if gem = bundle.specs.detect {|g| g.name == name }
-        return gem.version
-      end
-    end
   end
 
   def initialize(build_path, cache_path=nil)
@@ -434,6 +477,7 @@ WARNING
         patchlevel = run("ruby -e 'puts RUBY_PATCHLEVEL'").chomp
         cache_name  = "#{DEFAULT_RUBY_VERSION}-p#{patchlevel}-default-cache"
         @fetchers[:buildpack].fetch_untar("#{cache_name}.tgz")
+        run("bundle clean > /dev/null") # remove un-needed cache items
       end
     end
   end
@@ -473,21 +517,13 @@ WARNING
   def build_bundler
     instrument 'ruby.build_bundler' do
       log("bundle") do
+        topic("Installing dependencies using #{bundler.version}")
+
         bundle_without = ENV["BUNDLE_WITHOUT"] || "development:test"
-        bundle_bin     = "bundle"
-        bundle_command = "#{bundle_bin} install --without #{bundle_without} --path vendor/bundle --binstubs #{bundler_binstubs_path}"
+        bundle_command = "bundle install --without #{bundle_without} --path vendor/bundle --binstubs #{bundler_binstubs_path}"
 
-        unless File.exist?("Gemfile.lock")
-          error "Gemfile.lock is required. Please run \"bundle install\" locally\nand commit your Gemfile.lock."
-        end
-
-        if has_windows_gemfile_lock?
-          warn(<<WARNING)
-Removing `Gemfile.lock` because it was generated on Windows.
-Bundler will do a full resolve so native gems are handled properly.
-This may result in unexpected gem versions being used in your app.
-WARNING
-
+        if bundler.has_windows_gemfile_lock?
+          warn(WINDOWS_WARNING)
           log("bundle", "has_windows_gemfile_lock")
           File.unlink("Gemfile.lock")
         else
@@ -496,8 +532,6 @@ WARNING
           cache.load ".bundle"
         end
 
-        version = run_stdout("#{bundle_bin} version").strip
-        topic("Installing dependencies using #{version}")
 
         load_bundler_cache
 
@@ -529,7 +563,7 @@ WARNING
           log "bundle", :status => "success"
           puts "Cleaning up the bundler cache."
           instrument "ruby.bundle_clean" do
-            pipe "#{bundle_bin} clean 2> /dev/null"
+            pipe "bundle clean 2> /dev/null"
           end
           cache.store ".bundle"
           cache.store "vendor/bundle"
@@ -538,17 +572,11 @@ WARNING
           FileUtils.rm_rf("#{slug_vendor_base}/cache")
         else
           log "bundle", :status => "failure"
-          error_message = "Failed to install gems via Bundler."
           puts "Bundler Output: #{bundler_output}"
+          error_message = "Failed to install gems via Bundler.\n"
           if bundler_output.match(/Installing sqlite3 \([\w.]+\)( with native extensions)?\s+Gem::Installer::ExtensionBuildError: ERROR: Failed to build gem native extension./)
-            error_message += <<ERROR
-
-
-Detected sqlite3 gem which is not supported on Heroku.
-https://devcenter.heroku.com/articles/sqlite3
-ERROR
+            error_message << SQLITE_ERROR
           end
-
           error error_message
         end
       end
@@ -572,84 +600,14 @@ ERROR
 
   # writes ERB based database.yml for Rails. The database.yml uses the DATABASE_URL from the environment during runtime.
   def create_database_yml
+    config = Pathname.new("config")
     instrument 'ruby.create_database_yml' do
       log("create_database_yml") do
-        return unless File.directory?("config")
+        return unless config.directory?
         topic("Writing config/database.yml to read from DATABASE_URL")
-        File.open("config/database.yml", "w") do |file|
-          file.puts <<-DATABASE_YML
-<%
-
-require 'cgi'
-require 'uri'
-
-begin
-  uri = URI.parse(ENV["DATABASE_URL"])
-rescue URI::InvalidURIError
-  raise "Invalid DATABASE_URL"
-end
-
-raise "No RACK_ENV or RAILS_ENV found" unless ENV["RAILS_ENV"] || ENV["RACK_ENV"]
-
-def attribute(name, value, force_string = false)
-  if value
-    value_string =
-      if force_string
-        '"' + value + '"'
-      else
-        value
-      end
-    "\#{name}: \#{value_string}"
-  else
-    ""
-  end
-end
-
-adapter = uri.scheme
-adapter = "postgresql" if adapter == "postgres"
-
-database = (uri.path || "").split("/")[1]
-
-username = uri.user
-password = uri.password
-
-host = uri.host
-port = uri.port
-
-params = CGI.parse(uri.query || "")
-
-%>
-
-<%= ENV["RAILS_ENV"] || ENV["RACK_ENV"] %>:
-  <%= attribute "adapter",  adapter %>
-  <%= attribute "database", database %>
-  <%= attribute "username", username %>
-  <%= attribute "password", password, true %>
-  <%= attribute "host",     host %>
-  <%= attribute "port",     port %>
-
-<% params.each do |key, value| %>
-  <%= key %>: <%= value.first %>
-<% end %>
-        DATABASE_YML
-        end
+        config.join("database.yml").open("w") {|f| f.write DATABASE_YML }
       end
     end
-  end
-
-  # detects whether the Gemfile.lock contains the Windows platform
-  # @return [Boolean] true if the Gemfile.lock was created on Windows
-  def has_windows_gemfile_lock?
-    bundle.platforms.detect do |platform|
-      /mingw|mswin/.match(platform.os) if platform.is_a?(Gem::Platform)
-    end
-  end
-
-  # detects if a gem is in the bundle.
-  # @param [String] name of the gem in question
-  # @return [String, nil] if it finds the gem, it will return the line from bundle show or nil if nothing is found.
-  def gem_is_bundled?(gem)
-    bundle.specs.map(&:name).include?(gem)
   end
 
   # detects if a rake task is defined in the app
@@ -672,14 +630,14 @@ params = CGI.parse(uri.query || "")
   # decides if we need to enable the dev database addon
   # @return [Array] the database addon if the pg gem is detected or an empty Array if it isn't.
   def add_dev_database_addon
-    gem_is_bundled?("pg") ? ['heroku-postgresql:dev'] : []
+    bundler.has_gem?("pg") ? ['heroku-postgresql:dev'] : []
   end
 
   # decides if we need to install the node.js binary
   # @note execjs will blow up if no JS RUNTIME is detected and is loaded.
   # @return [Array] the node.js binary path if we need it or an empty Array
   def add_node_js_binary
-    gem_is_bundled?('execjs') ? [NODE_JS_BINARY_PATH] : []
+    bundler.has_gem?('execjs') ? [NODE_JS_BINARY_PATH] : []
   end
 
   def run_assets_precompile_rake_task
