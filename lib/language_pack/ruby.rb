@@ -113,6 +113,7 @@ class LanguagePack::Ruby < LanguagePack::Base
       install_jvm
       setup_language_pack_environment
       setup_profiled
+      build_jekyll
       allow_git do
         install_language_pack_gems
         build_bundler
@@ -125,6 +126,13 @@ class LanguagePack::Ruby < LanguagePack::Base
   end
 
 private
+
+  # build the Jekyll site
+
+  def build_jekyll
+    puts "Building jekyll site"
+    run("env PATH=$PATH bundle exec jekyll build")
+  end
 
   # the base PATH environment variable to be used
   # @return [String] the resulting PATH
